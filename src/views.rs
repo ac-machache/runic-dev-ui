@@ -1,87 +1,12 @@
-//! Render helpers: chat transcript, the Events-tab Run/Turn tree, and the
-//! State tab. Pure view functions returning `AnyView`.
+//! Render helpers for the inspector: the Events-tab Run/Turn tree and the
+//! State tab. Pure view functions returning `AnyView`. (Chat-transcript
+//! rendering lives in [`crate::components::chat`].)
 
 use leptos::prelude::*;
 use serde_json::Value;
 
-use crate::model::{Item, RunCluster, ToolView, TurnCluster};
-use crate::util::{
-    clean_tool_name, content_blocks, md_to_html, render_block_summary, short_id, truncate,
-};
-
-// ── chat transcript ──────────────────────────────────────────────────────
-
-pub fn render_item(item: Item) -> AnyView {
-    match item {
-        Item::User(text) => view! {
-            <div class="msg-user"><div class="bubble-user">{text}</div></div>
-        }.into_any(),
-        Item::Assistant(text) => view! {
-            <div class="msg-assistant">
-                <img class="avatar" src="favicon.png" alt="runic" />
-                <div class="assistant-body"><div class="prose" inner_html=md_to_html(&text)></div></div>
-            </div>
-        }.into_any(),
-        Item::Thinking(text) => view! {
-            <div class="msg-assistant">
-                <img class="avatar" src="favicon.png" alt="runic" />
-                <div class="assistant-body">
-                    <details class="thinking"><summary>"thinking"</summary><div class="thinking-body">{text}</div></details>
-                </div>
-            </div>
-        }.into_any(),
-        Item::Warning(text) => view! {
-            <div class="warn"><span class="ic">"⚠"</span><span class="tx">{text}</span></div>
-        }.into_any(),
-        Item::Tool(t) => render_tool_card(t),
-    }
-}
-
-fn render_tool_card(t: ToolView) -> AnyView {
-    let dot_cls = format!("tool-dot {}", t.status);
-    let status_cls = format!("tool-status {}", t.status);
-    let dur = if t.duration_ms > 0 {
-        format!("· {}ms", t.duration_ms)
-    } else {
-        String::new()
-    };
-    let label = clean_tool_name(&t.name);
-    let has_input = !t.input.is_empty();
-    let input = t.input.clone();
-    let has_result = !t.result.is_empty();
-    let is_err = t.status == "error";
-    let result = t.result.clone();
-    let res_cls = if is_err { "jsonpre error" } else { "jsonpre" };
-    let sources = t.sources.clone();
-    view! {
-        <div class="tool">
-            <div class="tool-head">
-                <span class=dot_cls></span>
-                <span class="tool-name">{label}</span>
-                <span class=status_cls>{t.status.clone()}</span>
-                <span class="tool-dur">{dur}</span>
-            </div>
-            {has_input.then(|| view! {
-                <details class="tool-sec"><summary>"args"</summary><pre class="jsonpre">{input}</pre></details>
-            })}
-            {has_result.then(move || view! {
-                <details class="tool-sec">
-                    <summary>"result"</summary>
-                    <pre class=res_cls>{result}</pre>
-                    {(!sources.is_empty()).then(|| view! {
-                        <div class="sources">
-                            {sources.iter().map(|s| {
-                                let url = s.url.clone();
-                                let title = if s.title.is_empty() { s.url.clone() } else { s.title.clone() };
-                                view! { <a class="chip" href=url target="_blank">{title}<span class="lk">"🔗"</span></a> }
-                            }).collect_view()}
-                        </div>
-                    })}
-                </details>
-            })}
-        </div>
-    }.into_any()
-}
+use crate::model::{RunCluster, ToolView, TurnCluster};
+use crate::util::{clean_tool_name, content_blocks, render_block_summary, short_id, truncate};
 
 // ── events tab: run/turn cluster rendering ───────────────────────────────
 

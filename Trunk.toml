@@ -1,5 +1,12 @@
 [watch]
-ignore = ["./src-tauri"]
+# don't rebuild-loop on the generated Tailwind output or the tauri shell
+ignore = ["./src-tauri", "./style/tailwind.out.css"]
 
 [serve]
 ws_protocol = "ws"
+
+# Compile Tailwind (scans .rs for utility classes) before each Trunk build.
+[[hooks]]
+stage = "pre_build"
+command = "sh"
+command_arguments = ["-c", "node_modules/.bin/tailwindcss -i style/tailwind.css -o style/tailwind.out.css"]

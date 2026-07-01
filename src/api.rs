@@ -153,6 +153,22 @@ impl ApiClient {
             .ok_or_else(|| "response missing thread_id".to_string())
     }
 
+    /// `DELETE /threads/:id` — drop the thread's session, artifacts, and warm
+    /// agent server-side (204 No Content on success).
+    pub async fn delete_thread(&self, id: &str) -> Result<(), String> {
+        let url = format!("{}/threads/{id}", self.base);
+        let resp = Request::delete(&url)
+            .header("x-runic-tenant", &self.tenant)
+            .send()
+            .await
+            .map_err(e2s)?;
+        if resp.ok() {
+            Ok(())
+        } else {
+            Err(format!("delete failed: HTTP {}", resp.status()))
+        }
+    }
+
     /// Full stored event log for a thread (snapshot, not a stream).
     pub async fn thread_events(&self, id: &str) -> Result<Vec<Value>, String> {
         let mut all = Vec::new();

@@ -17,6 +17,7 @@
 
 mod api;
 mod app;
+mod components;
 mod events;
 mod model;
 mod util;

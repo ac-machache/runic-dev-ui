@@ -2,3 +2,5 @@
 /dist
 .DS_Store
 .claude/
+node_modules/
+/style/tailwind.out.css

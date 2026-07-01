@@ -10,12 +10,14 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::api::ApiClient;
+use crate::components::chat::ChatPane;
+use crate::components::composer::Composer;
+use crate::components::sidebar::Sidebar;
 use crate::events::{
     append_live, apply_event, cluster_runs, flush_live, items_from_events, parse_ask, usage_of,
 };
 use crate::model::{Attachment, Item, LiveBuf, LiveKind, PendingAsk, ThreadInfo};
-use crate::util::short_id;
-use crate::views::{render_item, render_run, render_state};
+use crate::views::{render_run, render_state};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -48,6 +50,7 @@ pub fn App() -> impl IntoView {
     let dark = RwSignal::new(true);
     let collapsed = RwSignal::new(false);
     let config_open = RwSignal::new(false);
+    let show_inspector = RwSignal::new(false); // inspector hidden for now
     let split = RwSignal::new(50.0_f64); // chat % of the main area
     let dragging = RwSignal::new(false);
     let show_thinking = RwSignal::new(false);
@@ -139,6 +142,25 @@ pub fn App() -> impl IntoView {
                     }
                 }
                 Err(e) => leptos::logging::warn!("create_thread failed: {e}"),
+            }
+        });
+    };
+
+    let delete_thread = move |id: String| {
+        let c = client();
+        spawn_local(async move {
+            match c.delete_thread(&id).await {
+                Ok(()) => {
+                    threads.update(|t| t.retain(|x| x.id != id));
+                    if current.get_untracked().as_deref() == Some(id.as_str()) {
+                        current.set(None);
+                        items.set(Vec::new());
+                        live.set(LiveBuf::default());
+                        events.set(Vec::new());
+                        state_json.set(None);
+                    }
+                }
+                Err(e) => leptos::logging::warn!("delete_thread failed: {e}"),
             }
         });
     };
@@ -444,130 +466,27 @@ pub fn App() -> impl IntoView {
     refresh_threads();
 
     view! {
-        <div class="app" class:dark=move || dark.get()>
+        <div class="h-screen flex overflow-hidden bg-background text-foreground" class:dark=move || dark.get()>
 
             // ░░ SIDEBAR ░░
-            <aside class="sidebar" style:width=move || if collapsed.get() { "0px".to_string() } else { "264px".to_string() }>
-                <div class="sidebar-inner">
-                    <div class="brand">
-                        <div class="brand-l">
-                            <img class="brand-mark" src="favicon.png" alt="runic" />
-                            <div>
-                                <div class="brand-name">"runic"</div>
-                                <div class="brand-sub">"dev console"</div>
-                            </div>
-                        </div>
-                        <button class="collapse-btn" title="Collapse sidebar" on:click=move |_| collapsed.set(true)>"«"</button>
-                    </div>
-
-                    <div class="conn">
-                        <div class="section-cap conn-cap">"Connection"</div>
-                        <label class="conn-label">"server URL"</label>
-                        <input class="conn-input" spellcheck="false" prop:value=move || api_base.get()
-                            on:input=move |e| api_base.set(event_target_value(&e)) />
-                        <div class="conn-label row"><span>"tenant"</span><span class="conn-hint">"X-Runic-Tenant"</span></div>
-                        <input class="conn-input" spellcheck="false" prop:value=move || tenant.get()
-                            on:input=move |e| tenant.set(event_target_value(&e)) />
-                        <div class="conn-status"><span class="status-dot"></span><span>"connected"</span></div>
-                    </div>
-
-                    <div class="threads-head">
-                        <span class="section-cap">"Threads"</span>
-                        <button class="icon-btn" title="Refresh" on:click=move |_| refresh_threads()>"⟳"</button>
-                    </div>
-                    <div class="newthread-wrap">
-                        <button class="newthread" on:click=move |_| new_thread()><span>"＋"</span>"New thread"</button>
-                    </div>
-
-                    <div class="thread-list">
-                        {move || threads.get().into_iter().map(|t| {
-                            let id = t.id;
-                            let id_active = id.clone();
-                            let id_click = id.clone();
-                            let short = short_id(&id);
-                            let untitled = t.label.is_none();
-                            let title = t.label.unwrap_or_else(|| "untitled".to_string());
-                            view! {
-                                <div class="thread"
-                                    class:active=move || current.get().as_deref() == Some(id_active.as_str())
-                                    on:click=move |_| load_thread(id_click.clone())>
-                                    <span class="thread-accent"></span>
-                                    <div class="thread-row1">
-                                        <span class="thread-id">{short}</span>
-                                    </div>
-                                    <div class="thread-title" class:untitled=untitled>{title}</div>
-                                </div>
-                            }
-                        }).collect_view()}
-                        {move || threads_cursor.get().map(|_| view! {
-                            <button class="newthread" on:click=move |_| load_more_threads()>"Load more"</button>
-                        })}
-                    </div>
-
-                    <div class="theme-bar">
-                        <span class="theme-label">{move || if dark.get() { "Warm dark" } else { "Paper light" }}</span>
-                        <button class="theme-btn" on:click=move |_| dark.update(|d| *d = !*d)>
-                            {move || if dark.get() { "☀ Theme".to_string() } else { "☾ Theme".to_string() }}
-                        </button>
-                    </div>
-                </div>
-            </aside>
+            <Sidebar
+                api_base tenant dark collapsed threads threads_cursor current
+                on_refresh=Callback::new(move |_| refresh_threads())
+                on_new_thread=Callback::new(move |_| new_thread())
+                on_load_thread=Callback::new(move |id: String| load_thread(id))
+                on_load_more=Callback::new(move |_| load_more_threads())
+                on_delete_thread=Callback::new(move |id: String| delete_thread(id))
+            />
 
             // ░░ MAIN: chat | splitter | inspector ░░
-            <div class="main" node_ref=main_ref>
+            <div class="flex-1 flex min-w-0" node_ref=main_ref>
 
-                <section class="chat" style:flex=move || format!("1 1 {}%", split.get())>
-                    <div class="topbar">
-                        {move || collapsed.get().then(|| view! {
-                            <button class="rail-btn" title="Open sidebar" on:click=move |_| collapsed.set(false)>"»"</button>
-                        })}
-                        <span class="topbar-title">"Chat"</span>
-                        {move || current.get().map(|id| view! { <span class="thread-chip">{short_id(&id)}</span> })}
-                        {move || streaming.get().then(|| view! {
-                            <span class="stream-ind"><span class="stream-dot"></span>"streaming"</span>
-                        })}
-                    </div>
-
-                    <div class="transcript" node_ref=transcript_ref>
-                        <div class="transcript-inner">
-                            {move || (items.get().is_empty() && live.get().text.is_empty()).then(|| {
-                                let msg = if current.get().is_some() {
-                                    "Send a message to start the conversation."
-                                } else {
-                                    "Create or select a thread to begin."
-                                };
-                                view! { <div class="empty">{msg}</div> }
-                            })}
-                            {move || items.get().into_iter().map(render_item).collect_view()}
-                            {move || {
-                                let lb = live.get();
-                                if lb.text.is_empty() {
-                                    ().into_any()
-                                } else if matches!(lb.kind, LiveKind::Thinking) {
-                                    view! {
-                                        <div class="msg-assistant">
-                                            <img class="avatar" src="favicon.png" alt="runic" />
-                                            <div class="assistant-body"><div class="thinking-body">{lb.text}</div></div>
-                                        </div>
-                                    }.into_any()
-                                } else {
-                                    view! {
-                                        <div class="msg-assistant">
-                                            <img class="avatar" src="favicon.png" alt="runic" />
-                                            <div class="assistant-body">
-                                                <div class="prose"><p style="margin:0">{lb.text}<span class="caret"></span></p></div>
-                                            </div>
-                                        </div>
-                                    }.into_any()
-                                }
-                            }}
-                        </div>
-                    </div>
-
-                    // HITL ask card (the agent called ask_user)
-                    {move || has_pending.get().then(|| {
-                        let p = pending.get_untracked().expect("has_pending implies Some");
-                        let send_answer = move |_| {
+                <section class="relative flex flex-col min-w-0"
+                    style:flex=move || if show_inspector.get() { format!("1 1 {}%", split.get()) } else { "1 1 100%".to_string() }>
+                    <ChatPane
+                        collapsed current items live transcript_ref
+                        pending has_pending ask_answer
+                        on_submit_answer=Callback::new(move |_| {
                             let Some(p) = pending.get_untracked() else { return };
                             let a = ask_answer.get_untracked();
                             if a.trim().is_empty() { return; }
@@ -577,182 +496,72 @@ pub fn App() -> impl IntoView {
                             pending.set(None);
                             ask_answer.set(String::new());
                             spawn_local(async move { let _ = c.submit_answer(&thread, &ask_id, a).await; });
-                        };
-                        view! {
-                            <div class="composer">
-                                <div class="composer-inner">
-                                    <div class="approval">
-                                        <div class="apv-head">
-                                            <span class="ic">"⏸"</span>
-                                            <span class="apv-name">"agent is asking"</span>
-                                            <span class="apv-badge">"input needed"</span>
-                                        </div>
-                                        <div class="apv-body">
-                                            <div class="apv-summary">{p.question.clone()}</div>
-                                            {p.context.clone().map(|c| view! { <div class="apv-ctx">{c}</div> })}
-                                            <textarea class="apv-input" spellcheck="false" placeholder="Your answer…"
-                                                prop:value=move || ask_answer.get()
-                                                on:input=move |e| ask_answer.set(event_target_value(&e))></textarea>
-                                            <div class="apv-actions">
-                                                <button class="apv-submit" on:click=send_answer>"Send answer"</button>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        }
-                    })}
+                        })
+                    />
 
                     // composer
-                    <div class="composer">
-                        <div class="composer-inner">
-                            {move || config_open.get().then(|| view! {
-                                <div class="config-pop">
-                                    <div class="config-head">
-                                        <div class="config-head-l">
-                                            <span>"⚙"</span>
-                                            <span class="config-title">"Configurable"</span>
-                                            <span class="config-sub">"per-run context"</span>
-                                        </div>
-                                        <button class="config-x" on:click=move |_| config_open.set(false)>"✕"</button>
+                    <Composer
+                        current input streaming uploading recording
+                        config_open context_json attachments file_input_ref
+                        on_send=Callback::new(move |_| send())
+                        on_stop=Callback::new(move |_| stop())
+                        on_toggle_record=Callback::new(move |_| toggle_record())
+                        on_pick_files=Callback::new(move |_| pick_files())
+                    />
+                </section>
+
+                // ░░ SPLITTER + INSPECTOR — hidden for now (flip `show_inspector` to restore) ░░
+                {move || show_inspector.get().then(|| view! {
+                    <div class="splitter" class:dragging=move || dragging.get() node_ref=splitter_ref
+                        on:pointerdown=on_split_down on:pointermove=on_split_move on:pointerup=on_split_up
+                        on:dblclick=move |_| split.set(50.0)
+                        title="Drag to resize · double-click to reset"></div>
+
+                    <section class="inspector" style:flex=move || format!("1 1 {}%", 100.0 - split.get())>
+                        <div class="topbar">
+                            <span class="topbar-title dim">"Inspector"</span>
+                            <div class="tabs">
+                                <button class="tab" class:on=move || inspect_tab.get() == "events"
+                                    on:click=move |_| inspect_tab.set("events")>"Events"</button>
+                                <button class="tab" class:on=move || inspect_tab.get() == "state"
+                                    on:click=move |_| { inspect_tab.set("state"); fetch_state(); }>"State"</button>
+                            </div>
+                        </div>
+
+                        <div class="tab-body">
+                            // EVENTS
+                            {move || (inspect_tab.get() == "events").then(|| {
+                                let st = show_thinking.get();
+                                let runs = cluster_runs(&events.get());
+                                let total = runs.len();
+                                view! {
+                                    <div class="ev-filter">
+                                        <button class="filter-btn" on:click=move |_| show_thinking.update(|t| *t = !*t)>
+                                            {move || if show_thinking.get() { "hide thinking" } else { "show thinking" }}
+                                        </button>
                                     </div>
-                                    <div class="config-body">
-                                        <div class="config-row">
-                                            <label class="section-cap">"context"</label>
-                                            <span class="conn-hint">"open map · sent verbatim"</span>
-                                            {move || {
-                                                let t = context_json.get();
-                                                if t.trim().is_empty() {
-                                                    ().into_any()
-                                                } else if serde_json::from_str::<Value>(&t).is_ok() {
-                                                    view! { <span class="config-valid ok">"● valid"</span> }.into_any()
-                                                } else {
-                                                    view! { <span class="config-valid bad">"● invalid"</span> }.into_any()
-                                                }
-                                            }}
-                                        </div>
-                                        <textarea class="config-ta" spellcheck="false"
-                                            placeholder=r#"{ "user_id": "u1", "provider": "sonnet", "allow_web_search": true }"#
-                                            prop:value=move || context_json.get()
-                                            on:input=move |e| context_json.set(event_target_value(&e))></textarea>
+                                    <div class="ev-list">
+                                        {if total == 0 {
+                                            view! { <div class="empty">"No runs yet."</div> }.into_any()
+                                        } else {
+                                            runs.into_iter().enumerate().rev()
+                                                .map(|(i, r)| render_run(i, total, r, st))
+                                                .collect_view().into_any()
+                                        }}
                                     </div>
-                                </div>
+                                }
                             })}
 
-                            {move || {
-                                let a = attachments.get();
-                                (!a.is_empty()).then(|| view! {
-                                    <div class="attach-row">
-                                        {a.into_iter().enumerate().map(|(i, att)| view! {
-                                            <span class="attach-chip" title=att.media_type.clone()>
-                                                <span class="attach-name">{att.name}</span>
-                                                <button class="attach-x" title="Remove"
-                                                    on:click=move |_| attachments.update(|v| { if i < v.len() { v.remove(i); } })>"✕"</button>
-                                            </span>
-                                        }).collect_view()}
-                                    </div>
-                                })
-                            }}
-
-                            <div class="input-row">
-                                <textarea class="composer-input" spellcheck="false"
-                                    rows=move || input.get().lines().count().clamp(1, 6).to_string()
-                                    prop:value=move || input.get()
-                                    on:input=move |e| input.set(event_target_value(&e))
-                                    on:keydown=move |e| {
-                                        if e.key() == "Enter" && !e.shift_key() {
-                                            e.prevent_default();
-                                            send();
-                                        }
-                                    }
-                                    prop:disabled=move || current.get().is_none() || streaming.get()
-                                    placeholder=move || if current.get().is_some() {
-                                        "Message the agent…  (Enter to send)".to_string()
-                                    } else {
-                                        "Create or pick a thread first".to_string()
-                                    }></textarea>
-                                <button class="gear-btn" title="Attach files"
-                                    on:click=move |_| { if let Some(el) = file_input_ref.get() { el.click(); } }
-                                    prop:disabled=move || current.get().is_none() || streaming.get()>"📎"</button>
-                                <input type="file" multiple node_ref=file_input_ref style="display:none"
-                                    on:change=move |_| pick_files() />
-                                <button class="gear-btn" class:recording=move || recording.get()
-                                    title=move || if recording.get() { "Stop recording" } else { "Record voice" }
-                                    on:click=move |_| toggle_record()
-                                    prop:disabled=move || current.get().is_none() || streaming.get()>
-                                    {move || if recording.get() { "⏹" } else { "🎤" }}
-                                </button>
-                                <button class="gear-btn" title="Configurable" on:click=move |_| config_open.update(|c| *c = !*c)>
-                                    "⚙"
-                                    {move || (!context_json.get().trim().is_empty()).then(|| view! { <span class="gear-dot"></span> })}
-                                </button>
-                                {move || if streaming.get() {
-                                    view! { <button class="send-btn stop" on:click=move |_| stop()>"◼ Stop"</button> }.into_any()
-                                } else {
-                                    view! {
-                                        <button class="send-btn" on:click=move |_| send()
-                                            prop:disabled=move || current.get().is_none() || (uploading.get() > 0)>
-                                            {move || if uploading.get() > 0 { "Uploading…" } else { "Send ↵" }}
-                                        </button>
-                                    }.into_any()
-                                }}
-                            </div>
-                            <div class="composer-hint">"Enter to send · Shift+Enter for newline"</div>
+                            // STATE
+                            {move || (inspect_tab.get() == "state").then(|| {
+                                match state_json.get() {
+                                    None => view! { <div class="empty">"Loading state…"</div> }.into_any(),
+                                    Some(s) => render_state(&s, fetch_state).into_any(),
+                                }
+                            })}
                         </div>
-                    </div>
-                </section>
-
-                // splitter
-                <div class="splitter" class:dragging=move || dragging.get() node_ref=splitter_ref
-                    on:pointerdown=on_split_down on:pointermove=on_split_move on:pointerup=on_split_up
-                    on:dblclick=move |_| split.set(50.0)
-                    title="Drag to resize · double-click to reset"></div>
-
-                // ░░ INSPECTOR ░░
-                <section class="inspector" style:flex=move || format!("1 1 {}%", 100.0 - split.get())>
-                    <div class="topbar">
-                        <span class="topbar-title dim">"Inspector"</span>
-                        <div class="tabs">
-                            <button class="tab" class:on=move || inspect_tab.get() == "events"
-                                on:click=move |_| inspect_tab.set("events")>"Events"</button>
-                            <button class="tab" class:on=move || inspect_tab.get() == "state"
-                                on:click=move |_| { inspect_tab.set("state"); fetch_state(); }>"State"</button>
-                        </div>
-                    </div>
-
-                    <div class="tab-body">
-                        // EVENTS
-                        {move || (inspect_tab.get() == "events").then(|| {
-                            let st = show_thinking.get();
-                            let runs = cluster_runs(&events.get());
-                            let total = runs.len();
-                            view! {
-                                <div class="ev-filter">
-                                    <button class="filter-btn" on:click=move |_| show_thinking.update(|t| *t = !*t)>
-                                        {move || if show_thinking.get() { "hide thinking" } else { "show thinking" }}
-                                    </button>
-                                </div>
-                                <div class="ev-list">
-                                    {if total == 0 {
-                                        view! { <div class="empty">"No runs yet."</div> }.into_any()
-                                    } else {
-                                        runs.into_iter().enumerate().rev()
-                                            .map(|(i, r)| render_run(i, total, r, st))
-                                            .collect_view().into_any()
-                                    }}
-                                </div>
-                            }
-                        })}
-
-                        // STATE
-                        {move || (inspect_tab.get() == "state").then(|| {
-                            match state_json.get() {
-                                None => view! { <div class="empty">"Loading state…"</div> }.into_any(),
-                                Some(s) => render_state(&s, fetch_state).into_any(),
-                            }
-                        })}
-                    </div>
-                </section>
+                    </section>
+                })}
             </div>
         </div>
     }

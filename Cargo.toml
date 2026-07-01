@@ -56,3 +56,11 @@ web-sys = { version = "0.3", features = [
     "AudioContext",
     "AudioBuffer",
 ] }
+tw_merge = { version = "0.1.21", features = ["variant"] }
+icons = { version = "0.18.3", features = ["leptos"] }
+leptos_ui = "0.3.22"
+strum = "0.28.0"
+
+
+[package.metadata.leptos]
+tailwind-input-file = "style/tailwind.css"

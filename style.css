@@ -6,8 +6,8 @@
 :root {
   --paper:#FAF7F1; --paper-2:#F2ECE0; --surface:#FFFFFF; --surface-2:#FBF8F2;
   --ink:#1C1A17; --ink-2:#6B6052; --ink-3:#9A8F7E;
-  --border:#E7E0D2; --border-2:#D9CFBE;
-  --accent:#C15F3C; --accent-press:#A94E2F; --accent-soft:#D4A27F; --accent-wash:#F3E6DC;
+  --border-2:#D9CFBE;
+  --accent-press:#A94E2F; --accent-soft:#D4A27F; --accent-wash:#F3E6DC;
   --moss:#5F7A4E; --moss-wash:#E9EEDE;
   --brick:#B14B36; --brick-wash:#F6E2DB;
   --amber:#A8781F; --amber-wash:#F5EBD0;
@@ -22,8 +22,8 @@
 .dark {
   --paper:#1A1714; --paper-2:#221E19; --surface:#262220; --surface-2:#2D2824;
   --ink:#ECE6DB; --ink-2:#A79C8B; --ink-3:#736A5C;
-  --border:#322D26; --border-2:#3E382F;
-  --accent:#D27A55; --accent-press:#E28A64; --accent-soft:#C8966F; --accent-wash:#352822;
+  --border-2:#3E382F;
+  --accent-press:#E28A64; --accent-soft:#C8966F; --accent-wash:#352822;
   --moss:#8FAB78; --moss-wash:#262A1E;
   --brick:#DA7559; --brick-wash:#33211C;
   --amber:#D3A551; --amber-wash:#322811;
