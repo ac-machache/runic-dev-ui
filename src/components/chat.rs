@@ -3,11 +3,26 @@
 //! "agent is asking" card. Presentation only — state in via signals, the
 //! answer action out via a callback.
 
+use icons::Webhook;
 use leptos::prelude::*;
 
 use crate::components::ui::button::{Button, ButtonSize, ButtonVariant};
 use crate::model::{Item, LiveKind, ToolView};
 use crate::util::{clean_tool_name, md_to_html};
+
+/// Group a token count with thousands separators: `1234` -> `1,234`.
+fn commas(n: u64) -> String {
+    let s = n.to_string();
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len() + s.len() / 3);
+    for (i, c) in b.iter().enumerate() {
+        if i > 0 && (b.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(*c as char);
+    }
+    out
+}
 
 /// Dot + pill colour for a tool's status.
 fn status_colors(status: &str) -> (&'static str, &'static str) {
@@ -99,6 +114,26 @@ fn render_item(item: Item) -> AnyView {
             </div>
         }.into_any(),
         Item::Tool(t) => render_tool_card(t),
+        Item::Usage { input, output } => view! {
+            <div class="flex gap-2.5 px-4 pb-2 -mt-1">
+                <div class="w-6 shrink-0"></div>
+                <span class="font-mono text-[10.5px] text-muted-foreground">
+                    {format!("↑ {} · ↓ {} tokens", commas(input), commas(output))}
+                </span>
+            </div>
+        }.into_any(),
+        Item::Hook(h) => {
+            let kind = if h.kind.is_empty() { String::new() } else { format!("· {}", h.kind) };
+            view! {
+                <div class="mx-4 my-1.5 flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-1.5 text-[11px]">
+                    <Webhook class="size-3.5 text-amber-500 shrink-0" />
+                    <span class="font-mono font-medium text-foreground">{h.name}</span>
+                    <span class="text-muted-foreground">{h.lifecycle}{kind}</span>
+                    <span class="rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide bg-amber-500/15 text-amber-600 dark:text-amber-400 shrink-0">{h.outcome}</span>
+                    {h.note.map(|n| view! { <span class="text-muted-foreground truncate">{n}</span> })}
+                </div>
+            }.into_any()
+        }
     }
 }
 

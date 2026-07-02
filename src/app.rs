@@ -37,6 +37,7 @@ pub fn App() -> impl IntoView {
     let attachments = RwSignal::new(Vec::<Attachment>::new());
     let uploading = RwSignal::new(0usize);
     let streaming = RwSignal::new(false);
+    let cancelling = RwSignal::new(false);
     let context_json = RwSignal::new(String::new());
     let pending = RwSignal::new(None::<PendingAsk>);
     let ask_answer = RwSignal::new(String::new());
@@ -271,15 +272,25 @@ pub fn App() -> impl IntoView {
                 Err(e) => leptos::logging::warn!("list_threads refresh failed: {e}"),
             }
             streaming.set(false);
+            cancelling.set(false);
             abort.set(None);
             pending.set(None);
         });
     };
 
+    // Graceful cancel: ask the server to wind the run down (it finishes the
+    // current turn, then ends the stream) rather than hard-killing the SSE.
     let stop = move || {
-        if let Some(c) = abort.get_untracked() {
-            c.abort();
-        }
+        let Some(thread) = current.get_untracked() else {
+            return;
+        };
+        cancelling.set(true);
+        let c = client();
+        spawn_local(async move {
+            if let Err(e) = c.cancel_run(&thread).await {
+                leptos::logging::warn!("cancel_run failed: {e}");
+            }
+        });
     };
 
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
@@ -501,7 +512,7 @@ pub fn App() -> impl IntoView {
 
                     // composer
                     <Composer
-                        current input streaming uploading recording
+                        current input streaming cancelling uploading recording
                         config_open context_json attachments file_input_ref
                         on_send=Callback::new(move |_| send())
                         on_stop=Callback::new(move |_| stop())

@@ -242,6 +242,23 @@ impl ApiClient {
         }
     }
 
+    /// `POST /threads/:id/runs/cancel` — ask the server to gracefully cancel
+    /// the thread's in-flight run (it finishes the current turn, then ends the
+    /// stream). 202 = requested, 409 = nothing in flight (treated as a no-op).
+    pub async fn cancel_run(&self, thread: &str) -> Result<(), String> {
+        let url = format!("{}/threads/{thread}/runs/cancel", self.base);
+        let resp = Request::post(&url)
+            .header("x-runic-tenant", &self.tenant)
+            .send()
+            .await
+            .map_err(e2s)?;
+        if resp.ok() || resp.status() == 409 {
+            Ok(())
+        } else {
+            Err(format!("cancel failed: HTTP {}", resp.status()))
+        }
+    }
+
     /// POST a run and invoke `on_event` for every parsed SSE event as it
     /// streams in. Resolves when the stream closes.
     pub async fn stream_run(

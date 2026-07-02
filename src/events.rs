@@ -5,7 +5,9 @@
 use leptos::prelude::*;
 use serde_json::Value;
 
-use crate::model::{Item, LiveBuf, LiveKind, PendingAsk, RunCluster, ToolView, TurnCluster};
+use crate::model::{
+    HookView, Item, LiveBuf, LiveKind, PendingAsk, RunCluster, ToolView, TurnCluster,
+};
 use crate::util::{content_blocks, first_text, parse_sources, pretty_json, truncate};
 
 // ── Events tab: cluster a flat event list into Run → Turn → details ───────
@@ -537,6 +539,22 @@ pub fn apply_event(items: &mut Vec<Item>, ev: &Value) {
                 .and_then(|v| v.as_str())
                 .unwrap_or("run failed");
             items.push(Item::Warning(format!("run failed: {m}")));
+        }
+        "usage" => {
+            let i = ev.get("input_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            let o = ev.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+            if i > 0 || o > 0 {
+                items.push(Item::Usage { input: i, output: o });
+            }
+        }
+        "hook_fired" => {
+            items.push(Item::Hook(HookView {
+                name: ev.get("hook_name").and_then(|v| v.as_str()).unwrap_or("hook").to_string(),
+                kind: ev.get("hook_kind").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                lifecycle: ev.get("lifecycle").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                outcome: ev.get("outcome").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                note: ev.get("note").and_then(|v| v.as_str()).map(String::from),
+            }));
         }
         "message" => {
             if let Some(msg) = ev.get("msg") {

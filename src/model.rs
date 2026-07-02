@@ -45,6 +45,21 @@ pub enum Item {
     Thinking(String),
     Tool(ToolView),
     Warning(String),
+    Hook(HookView),
+    /// Token usage for the run just finished (input, output).
+    Usage { input: u64, output: u64 },
+}
+
+/// A fired hook — surfaced inline so the operator can see lifecycle hooks
+/// acting (a `hook_fired` wire event; only fires when the outcome isn't a
+/// plain `continue`).
+#[derive(Clone, Debug)]
+pub struct HookView {
+    pub name: String,
+    pub kind: String,
+    pub lifecycle: String,
+    pub outcome: String,
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]

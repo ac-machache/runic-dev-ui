@@ -57,6 +57,7 @@ pub fn Composer(
     current: RwSignal<Option<String>>,
     input: RwSignal<String>,
     streaming: RwSignal<bool>,
+    cancelling: RwSignal<bool>,
     uploading: RwSignal<usize>,
     recording: RwSignal<bool>,
     config_open: RwSignal<bool>,
@@ -239,8 +240,11 @@ pub fn Composer(
 
                     {move || if streaming.get() {
                         view! {
-                            <Button variant=ButtonVariant::Destructive on:click=move |_| on_stop.run(())>
-                                <Square class="fill-current" />"Stop"
+                            <Button variant=ButtonVariant::Destructive
+                                attr:disabled=move || cancelling.get()
+                                on:click=move |_| on_stop.run(())>
+                                <Square class="fill-current" />
+                                {move || if cancelling.get() { "Cancelling…" } else { "Stop" }}
                             </Button>
                         }.into_any()
                     } else {
