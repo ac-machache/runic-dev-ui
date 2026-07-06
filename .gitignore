@@ -4,3 +4,5 @@
 .claude/
 node_modules/
 /style/tailwind.out.css
+.codegraph/
+fixtures/

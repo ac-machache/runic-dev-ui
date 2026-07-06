@@ -10,7 +10,7 @@ use futures::StreamExt;
 use gloo_net::http::Request;
 use serde_json::Value;
 
-use crate::model::{Attachment, ThreadInfo};
+use crate::model::{AgentInfo, Attachment, ThreadInfo};
 
 #[derive(Clone)]
 pub struct ApiClient {
@@ -169,6 +169,41 @@ impl ApiClient {
         }
     }
 
+    /// `GET /healthz` — true when the server answers 2xx. Used to drive the
+    /// sidebar connection indicator (no tenant header needed).
+    pub async fn health(&self) -> bool {
+        let url = format!("{}/healthz", self.base);
+        matches!(Request::get(&url).send().await, Ok(r) if r.ok())
+    }
+
+    /// `GET /agents` — the registered agent roster.
+    pub async fn list_agents(&self) -> Result<Vec<AgentInfo>, String> {
+        let url = format!("{}/agents", self.base);
+        let v: Value = Request::get(&url)
+            .header("x-runic-tenant", &self.tenant)
+            .send()
+            .await
+            .map_err(e2s)?
+            .json()
+            .await
+            .map_err(e2s)?;
+        let agents = v
+            .get("agents")
+            .and_then(|a| a.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| {
+                        let name = a.get("name").and_then(|x| x.as_str())?.to_string();
+                        let description =
+                            a.get("description").and_then(|x| x.as_str()).map(String::from);
+                        Some(AgentInfo { name, description })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(agents)
+    }
+
     /// Full stored event log for a thread (snapshot, not a stream).
     pub async fn thread_events(&self, id: &str) -> Result<Vec<Value>, String> {
         let mut all = Vec::new();
@@ -259,6 +294,25 @@ impl ApiClient {
         }
     }
 
+    /// `POST /threads/:id/runs/steer` — queue a steering message that the
+    /// in-flight run applies at its next turn boundary. 202 = queued, 409 =
+    /// nothing in flight (treated as a no-op).
+    pub async fn steer_run(&self, thread: &str, text: &str) -> Result<(), String> {
+        let url = format!("{}/threads/{thread}/runs/steer", self.base);
+        let resp = Request::post(&url)
+            .header("x-runic-tenant", &self.tenant)
+            .json(&serde_json::json!({ "text": text }))
+            .map_err(e2s)?
+            .send()
+            .await
+            .map_err(e2s)?;
+        if resp.ok() || resp.status() == 409 {
+            Ok(())
+        } else {
+            Err(format!("steer failed: HTTP {}", resp.status()))
+        }
+    }
+
     /// POST a run and invoke `on_event` for every parsed SSE event as it
     /// streams in. Resolves when the stream closes.
     pub async fn stream_run(
@@ -267,6 +321,7 @@ impl ApiClient {
         message: &str,
         attachments: &[Attachment],
         context: Option<Value>,
+        agent: Option<&str>,
         abort: Option<&web_sys::AbortSignal>,
         mut on_event: impl FnMut(Value),
     ) -> Result<(), String> {
@@ -291,6 +346,10 @@ impl ApiClient {
         // verbatim; the server's build_run_context decides what keys mean.
         if let Some(ctx) = context {
             body["context"] = ctx;
+        }
+        // Which registered agent handles this run (server defaults to "default").
+        if let Some(a) = agent.filter(|a| !a.is_empty()) {
+            body["agent"] = serde_json::Value::String(a.to_string());
         }
         let resp = Request::post(&url)
             .header("x-runic-tenant", &self.tenant)

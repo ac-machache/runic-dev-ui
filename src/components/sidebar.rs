@@ -20,6 +20,7 @@ pub fn Sidebar(
     threads: RwSignal<Vec<ThreadInfo>>,
     threads_cursor: RwSignal<Option<String>>,
     current: RwSignal<Option<String>>,
+    connected: RwSignal<bool>,
     #[prop(into)] on_refresh: Callback<()>,
     #[prop(into)] on_new_thread: Callback<()>,
     #[prop(into)] on_load_thread: Callback<String>,
@@ -62,8 +63,12 @@ pub fn Sidebar(
                     </div>
                     <Input bind_value=tenant class="h-8 font-mono text-[12px]" />
                     <div class="flex items-center gap-1.5 mt-3 text-[11px] text-muted-foreground">
-                        <span class="w-[7px] h-[7px] rounded-full bg-emerald-500 ring-[3px] ring-emerald-500/15"></span>
-                        <span>"connected"</span>
+                        <span class="w-[7px] h-[7px] rounded-full ring-[3px]"
+                            class=("bg-emerald-500", move || connected.get())
+                            class=("ring-emerald-500/15", move || connected.get())
+                            class=("bg-muted-foreground/40", move || !connected.get())
+                            class=("ring-muted-foreground/10", move || !connected.get())></span>
+                        <span>{move || if connected.get() { "connected" } else { "disconnected" }}</span>
                     </div>
                 </div>
 

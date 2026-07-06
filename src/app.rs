@@ -12,12 +12,12 @@ use wasm_bindgen_futures::JsFuture;
 use crate::api::ApiClient;
 use crate::components::chat::ChatPane;
 use crate::components::composer::Composer;
+use crate::components::inspector::Inspector;
 use crate::components::sidebar::Sidebar;
 use crate::events::{
-    append_live, apply_event, cluster_runs, flush_live, items_from_events, parse_ask, usage_of,
+    append_live, apply_event, flush_live, items_from_events, parse_ask, usage_of,
 };
-use crate::model::{Attachment, Item, LiveBuf, LiveKind, PendingAsk, ThreadInfo};
-use crate::views::{render_run, render_state};
+use crate::model::{AgentInfo, Attachment, Item, LiveBuf, LiveKind, PendingAsk, ThreadInfo};
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -39,24 +39,22 @@ pub fn App() -> impl IntoView {
     let streaming = RwSignal::new(false);
     let cancelling = RwSignal::new(false);
     let context_json = RwSignal::new(String::new());
+    let agents = RwSignal::new(Vec::<AgentInfo>::new());
+    let selected_agent = RwSignal::new(None::<String>);
+    let connected = RwSignal::new(false);
     let pending = RwSignal::new(None::<PendingAsk>);
     let ask_answer = RwSignal::new(String::new());
     let has_pending = Memo::new(move |_| pending.get().is_some());
 
     let abort = RwSignal::new(None::<web_sys::AbortController>);
-    let inspect_tab = RwSignal::new("events");
     let state_json = RwSignal::new(None::<Value>);
 
     // ── chrome / UI state ──────────────────────────────────────────────
     let dark = RwSignal::new(true);
     let collapsed = RwSignal::new(false);
     let config_open = RwSignal::new(false);
-    let show_inspector = RwSignal::new(false); // inspector hidden for now
-    let split = RwSignal::new(50.0_f64); // chat % of the main area
-    let dragging = RwSignal::new(false);
     let show_thinking = RwSignal::new(false);
     let main_ref = NodeRef::<leptos::html::Div>::new();
-    let splitter_ref = NodeRef::<leptos::html::Div>::new();
 
     // Auto-scroll the transcript as content arrives.
     let transcript_ref = NodeRef::<leptos::html::Div>::new();
@@ -194,6 +192,7 @@ pub fn App() -> impl IntoView {
                 }
             }
         };
+        let agent_val = selected_agent.get_untracked();
 
         input.set(String::new());
         attachments.set(Vec::new());
@@ -252,6 +251,7 @@ pub fn App() -> impl IntoView {
                     &text,
                     &atts,
                     context_val,
+                    agent_val.as_deref(),
                     signal.as_ref(),
                     on_event,
                 )
@@ -289,6 +289,24 @@ pub fn App() -> impl IntoView {
         spawn_local(async move {
             if let Err(e) = c.cancel_run(&thread).await {
                 leptos::logging::warn!("cancel_run failed: {e}");
+            }
+        });
+    };
+
+    // Steer: inject guidance into the running run (applied at the next turn).
+    let steer = move || {
+        let text = input.get_untracked();
+        if text.trim().is_empty() {
+            return;
+        }
+        let Some(thread) = current.get_untracked() else {
+            return;
+        };
+        input.set(String::new());
+        let c = client();
+        spawn_local(async move {
+            if let Err(e) = c.steer_run(&thread, &text).await {
+                leptos::logging::warn!("steer failed: {e}");
             }
         });
     };
@@ -452,36 +470,46 @@ pub fn App() -> impl IntoView {
         });
     };
 
-    // ── splitter drag (pointer capture keeps events on the handle) ──────
-    let on_split_down = move |e: web_sys::PointerEvent| {
-        e.prevent_default();
-        dragging.set(true);
-        if let Some(el) = splitter_ref.get() {
-            let _ = el.set_pointer_capture(e.pointer_id());
-        }
-    };
-    let on_split_move = move |e: web_sys::PointerEvent| {
-        if !dragging.get_untracked() {
-            return;
-        }
-        if let Some(m) = main_ref.get_untracked() {
-            let rect = m.get_bounding_client_rect();
-            if rect.width() > 0.0 {
-                let pct = (e.client_x() as f64 - rect.left()) / rect.width() * 100.0;
-                split.set(pct.clamp(28.0, 72.0));
-            }
-        }
-    };
-    let on_split_up = move |_e: web_sys::PointerEvent| dragging.set(false);
-
     refresh_threads();
+
+    // Agent roster (once per connection); default the picker to "default".
+    {
+        let c = client();
+        spawn_local(async move {
+            if let Ok(a) = c.list_agents().await {
+                if selected_agent.get_untracked().is_none() {
+                    let d = a
+                        .iter()
+                        .find(|x| x.name == "default")
+                        .or_else(|| a.first())
+                        .map(|x| x.name.clone());
+                    selected_agent.set(d);
+                }
+                agents.set(a);
+            }
+        });
+    }
+
+    // Connection health: re-ping whenever the server URL / tenant changes…
+    Effect::new(move |_| {
+        let c = ApiClient::new(api_base.get(), tenant.get());
+        spawn_local(async move { connected.set(c.health().await) });
+    });
+    // …and on a periodic heartbeat.
+    set_interval(
+        move || {
+            let c = client();
+            spawn_local(async move { connected.set(c.health().await) });
+        },
+        std::time::Duration::from_secs(10),
+    );
 
     view! {
         <div class="h-screen flex overflow-hidden bg-background text-foreground" class:dark=move || dark.get()>
 
             // ░░ SIDEBAR ░░
             <Sidebar
-                api_base tenant dark collapsed threads threads_cursor current
+                api_base tenant dark collapsed threads threads_cursor current connected
                 on_refresh=Callback::new(move |_| refresh_threads())
                 on_new_thread=Callback::new(move |_| new_thread())
                 on_load_thread=Callback::new(move |id: String| load_thread(id))
@@ -489,11 +517,9 @@ pub fn App() -> impl IntoView {
                 on_delete_thread=Callback::new(move |id: String| delete_thread(id))
             />
 
-            // ░░ MAIN: chat | splitter | inspector ░░
+            // ░░ MAIN: chat (full width) + inspector drawer overlay ░░
             <div class="flex-1 flex min-w-0" node_ref=main_ref>
-
-                <section class="relative flex flex-col min-w-0"
-                    style:flex=move || if show_inspector.get() { format!("1 1 {}%", split.get()) } else { "1 1 100%".to_string() }>
+                <section class="relative flex flex-col min-w-0 flex-1">
                     <ChatPane
                         collapsed current items live transcript_ref
                         pending has_pending ask_answer
@@ -514,65 +540,20 @@ pub fn App() -> impl IntoView {
                     <Composer
                         current input streaming cancelling uploading recording
                         config_open context_json attachments file_input_ref
+                        agents selected_agent
                         on_send=Callback::new(move |_| send())
                         on_stop=Callback::new(move |_| stop())
+                        on_steer=Callback::new(move |_| steer())
                         on_toggle_record=Callback::new(move |_| toggle_record())
                         on_pick_files=Callback::new(move |_| pick_files())
                     />
+
+                    // inspector — floating trigger (top-right) + slide-over drawer
+                    <Inspector
+                        events state_json show_thinking
+                        on_refresh_state=Callback::new(move |_| fetch_state())
+                    />
                 </section>
-
-                // ░░ SPLITTER + INSPECTOR — hidden for now (flip `show_inspector` to restore) ░░
-                {move || show_inspector.get().then(|| view! {
-                    <div class="splitter" class:dragging=move || dragging.get() node_ref=splitter_ref
-                        on:pointerdown=on_split_down on:pointermove=on_split_move on:pointerup=on_split_up
-                        on:dblclick=move |_| split.set(50.0)
-                        title="Drag to resize · double-click to reset"></div>
-
-                    <section class="inspector" style:flex=move || format!("1 1 {}%", 100.0 - split.get())>
-                        <div class="topbar">
-                            <span class="topbar-title dim">"Inspector"</span>
-                            <div class="tabs">
-                                <button class="tab" class:on=move || inspect_tab.get() == "events"
-                                    on:click=move |_| inspect_tab.set("events")>"Events"</button>
-                                <button class="tab" class:on=move || inspect_tab.get() == "state"
-                                    on:click=move |_| { inspect_tab.set("state"); fetch_state(); }>"State"</button>
-                            </div>
-                        </div>
-
-                        <div class="tab-body">
-                            // EVENTS
-                            {move || (inspect_tab.get() == "events").then(|| {
-                                let st = show_thinking.get();
-                                let runs = cluster_runs(&events.get());
-                                let total = runs.len();
-                                view! {
-                                    <div class="ev-filter">
-                                        <button class="filter-btn" on:click=move |_| show_thinking.update(|t| *t = !*t)>
-                                            {move || if show_thinking.get() { "hide thinking" } else { "show thinking" }}
-                                        </button>
-                                    </div>
-                                    <div class="ev-list">
-                                        {if total == 0 {
-                                            view! { <div class="empty">"No runs yet."</div> }.into_any()
-                                        } else {
-                                            runs.into_iter().enumerate().rev()
-                                                .map(|(i, r)| render_run(i, total, r, st))
-                                                .collect_view().into_any()
-                                        }}
-                                    </div>
-                                }
-                            })}
-
-                            // STATE
-                            {move || (inspect_tab.get() == "state").then(|| {
-                                match state_json.get() {
-                                    None => view! { <div class="empty">"Loading state…"</div> }.into_any(),
-                                    Some(s) => render_state(&s, fetch_state).into_any(),
-                                }
-                            })}
-                        </div>
-                    </section>
-                })}
             </div>
         </div>
     }

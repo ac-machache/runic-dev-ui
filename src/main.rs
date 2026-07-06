@@ -21,7 +21,6 @@ mod components;
 mod events;
 mod model;
 mod util;
-mod views;
 
 fn main() {
     console_error_panic_hook::set_once();

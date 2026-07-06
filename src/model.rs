@@ -8,6 +8,13 @@ pub struct ThreadInfo {
     pub label: Option<String>,
 }
 
+/// A registered agent from `GET /agents` — pick one per run.
+#[derive(Clone, PartialEq)]
+pub struct AgentInfo {
+    pub name: String,
+    pub description: Option<String>,
+}
+
 /// A file the user attached to the next message. Uploaded to the artifact
 /// store on pick; the message carries the `id` as an `artifact_ref` block, not
 /// the bytes.
@@ -95,6 +102,8 @@ pub struct PendingAsk {
 #[derive(Clone, Default)]
 pub struct RunCluster {
     pub id: String,
+    /// Which registered agent handled the run (from `run_start.agent`).
+    pub agent: Option<String>,
     pub prompt: String,
     pub running: bool,
     pub ended: bool,
@@ -102,6 +111,10 @@ pub struct RunCluster {
     pub turns: Vec<TurnCluster>,
     pub stop_reason: Option<String>,
     pub usage: Option<(u64, u64)>,
+    /// Epoch ms of the run's `RunStart` (from persisted `at`), for timing.
+    pub start_ms: Option<f64>,
+    /// Wall-clock run duration in ms (`RunEnd.at - RunStart.at`).
+    pub duration_ms: Option<u64>,
 }
 
 #[derive(Clone, Default)]
@@ -109,6 +122,7 @@ pub struct TurnCluster {
     pub text: String,
     pub thinking: String,
     pub tools: Vec<ToolView>,
+    pub hooks: Vec<HookView>,
     pub stop_reason: Option<String>,
     pub tool_calls: u32,
     pub closed: bool,

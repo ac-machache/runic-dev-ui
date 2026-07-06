@@ -3,12 +3,15 @@
 //! and the per-run "Configurable" popover. Presentation only — state in via
 //! signals, actions out via callbacks.
 
-use icons::{Braces, List, Mic, Paperclip, Plus, Send, SlidersHorizontal, Square};
+use icons::{Braces, Compass, List, Mic, Paperclip, Plus, Send, SlidersHorizontal, Square};
 use leptos::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::components::ui::button::{Button, ButtonSize, ButtonVariant};
-use crate::model::Attachment;
+use crate::components::ui::select::{
+    Select, SelectContent, SelectOption, SelectPosition, SelectTrigger, SelectValue,
+};
+use crate::model::{AgentInfo, Attachment};
 
 const FIELD_CLS: &str = "w-full rounded-md border border-border bg-background px-3 py-2 text-[13px] font-mono text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 placeholder:text-muted-foreground";
 
@@ -63,9 +66,12 @@ pub fn Composer(
     config_open: RwSignal<bool>,
     context_json: RwSignal<String>,
     attachments: RwSignal<Vec<Attachment>>,
+    agents: RwSignal<Vec<AgentInfo>>,
+    selected_agent: RwSignal<Option<String>>,
     file_input_ref: NodeRef<leptos::html::Input>,
     #[prop(into)] on_send: Callback<()>,
     #[prop(into)] on_stop: Callback<()>,
+    #[prop(into)] on_steer: Callback<()>,
     #[prop(into)] on_toggle_record: Callback<()>,
     #[prop(into)] on_pick_files: Callback<()>,
 ) -> impl IntoView {
@@ -194,11 +200,14 @@ pub fn Composer(
                     on:keydown=move |e| {
                         if e.key() == "Enter" && !e.shift_key() {
                             e.prevent_default();
-                            on_send.run(());
+                            // While a run streams, Enter steers it; otherwise sends.
+                            if streaming.get() { on_steer.run(()) } else { on_send.run(()) }
                         }
                     }
-                    prop:disabled=move || current.get().is_none() || streaming.get()
-                    placeholder=move || if current.get().is_some() {
+                    prop:disabled=move || current.get().is_none()
+                    placeholder=move || if streaming.get() {
+                        "Steer the running agent… (applied next turn)".to_string()
+                    } else if current.get().is_some() {
                         "Message the agent…".to_string()
                     } else {
                         "Create or pick a thread first".to_string()
@@ -206,6 +215,23 @@ pub fn Composer(
 
                 // ── toolbar row (icons left · send right) ───────────────
                 <div class="flex items-center gap-0.5 pt-1.5">
+                    {move || {
+                        let list = agents.get();
+                        (!list.is_empty()).then(|| {
+                            let initial = selected_agent.get_untracked().unwrap_or_default();
+                            view! {
+                                <Select class="mr-1" default_value=initial
+                                    on_change=Callback::new(move |v: Option<String>| selected_agent.set(v))>
+                                    <SelectTrigger class="h-8 min-w-[112px] max-w-[150px] text-[11px]">
+                                        <SelectValue placeholder="agent" />
+                                    </SelectTrigger>
+                                    <SelectContent class="text-[12px]" position=SelectPosition::Above>
+                                        {list.into_iter().map(|a| { let n = a.name.clone(); view! { <SelectOption value=a.name>{n}</SelectOption> } }).collect_view()}
+                                    </SelectContent>
+                                </Select>
+                            }
+                        })
+                    }}
                     <Button variant=ButtonVariant::Ghost size=ButtonSize::IconSm
                         attr:title="Attach files"
                         attr:disabled=move || current.get().is_none() || streaming.get()
@@ -240,6 +266,12 @@ pub fn Composer(
 
                     {move || if streaming.get() {
                         view! {
+                            <Button variant=ButtonVariant::Outline
+                                attr:title="Steer the running agent (applied at next turn)"
+                                attr:disabled=move || cancelling.get() || input.with(|i| i.trim().is_empty())
+                                on:click=move |_| on_steer.run(())>
+                                <Compass />"Steer"
+                            </Button>
                             <Button variant=ButtonVariant::Destructive
                                 attr:disabled=move || cancelling.get()
                                 on:click=move |_| on_stop.run(())>

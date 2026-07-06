@@ -61,11 +61,19 @@ pub fn cluster_runs(events: &[Value]) -> Vec<RunCluster> {
                 // SAME run — adopt its id rather than starting a second, empty
                 // cluster. For replay (no `run_begin`) the last run is already
                 // ended, so a fresh cluster is created.
+                let start_ms = parse_at(ev);
+                let agent = ev.get("agent").and_then(|v| v.as_str()).map(String::from);
                 match runs.last_mut() {
-                    Some(r) if r.running && r.id.is_empty() && r.turns.is_empty() => r.id = id,
+                    Some(r) if r.running && r.id.is_empty() && r.turns.is_empty() => {
+                        r.id = id;
+                        r.start_ms = start_ms;
+                        r.agent = agent;
+                    }
                     _ => runs.push(RunCluster {
                         id,
+                        agent,
                         running: true,
+                        start_ms,
                         ..Default::default()
                     }),
                 }
@@ -98,21 +106,8 @@ pub fn cluster_runs(events: &[Value]) -> Vec<RunCluster> {
                     ..Default::default()
                 });
             }
-            // `tool_dispatching` is no longer emitted live, but persisted-replay
-            // Message events still carry tool input; this arm stays harmless.
-            "tool_dispatching" => {
-                let id = ev
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let input = ev.get("input").map(pretty_json).unwrap_or_default();
-                if let Some(t) = find_tool(&mut runs, &id) {
-                    t.input = input;
-                }
-            }
-            // Live `tool_finish` now carries only {id,name,is_error}; preview /
-            // duration / metadata default away (they arrive via persisted replay).
+            // Live `tool_finish` carries {id,name,is_error,preview}; duration /
+            // metadata (sources) default away and arrive via persisted replay.
             "tool_finish" => {
                 let id = ev
                     .get("id")
@@ -150,19 +145,37 @@ pub fn cluster_runs(events: &[Value]) -> Vec<RunCluster> {
                     if let Some(sr) = ev.get("stop_reason").and_then(|v| v.as_str()) {
                         turn.stop_reason = Some(sr.to_string());
                     }
-                    match ev.get("tool_calls_this_turn").and_then(|v| v.as_u64()) {
-                        Some(tc) => turn.tool_calls = tc as u32,
-                        None if turn.tool_calls == 0 => turn.tool_calls = turn.tools.len() as u32,
-                        None => {}
+                    if turn.tool_calls == 0 {
+                        turn.tool_calls = turn.tools.len() as u32;
                     }
                 }
             }
             "run_end" | "RunEnd" | "done" => {
+                let end_ms = parse_at(ev);
                 if let Some(run) = runs.last_mut() {
                     run.running = false;
                     run.ended = true;
                     if let Some(sr) = ev.get("stop_reason").and_then(|v| v.as_str()) {
                         run.stop_reason = Some(sr.to_string());
+                    }
+                    // Persisted `RunEnd` carries `outcome { usage, stop_reason }`.
+                    if let Some(o) = ev.get("outcome") {
+                        if let (Some(i), Some(out)) = (
+                            o.pointer("/usage/input_tokens").and_then(|v| v.as_u64()),
+                            o.pointer("/usage/output_tokens").and_then(|v| v.as_u64()),
+                        ) {
+                            run.usage = Some((i, out));
+                        }
+                        if run.stop_reason.is_none() {
+                            if let Some(sr) = o.get("stop_reason").and_then(|v| v.as_str()) {
+                                run.stop_reason = Some(sr.to_string());
+                            }
+                        }
+                    }
+                    if let (Some(s), Some(e)) = (run.start_ms, end_ms) {
+                        if e >= s {
+                            run.duration_ms = Some((e - s) as u64);
+                        }
                     }
                     if let Some(t) = run.turns.last_mut() {
                         t.closed = true;
@@ -171,6 +184,23 @@ pub fn cluster_runs(events: &[Value]) -> Vec<RunCluster> {
                         }
                     }
                 }
+            }
+            // Persisted kind `HookFired` (was `HookRan` on older threads) + live `hook_fired`.
+            "HookFired" | "HookRan" | "hook_fired" => {
+                let name = ev
+                    .get("hook")
+                    .or_else(|| ev.get("hook_name"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("hook")
+                    .to_string();
+                let hook = HookView {
+                    name,
+                    kind: ev.get("hook_kind").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    lifecycle: ev.get("lifecycle").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    outcome: ev.get("outcome").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    note: ev.get("note").and_then(|v| v.as_str()).map(String::from),
+                };
+                cur_turn(&mut runs).hooks.push(hook);
             }
             "usage" => {
                 if let Some(run) = runs.last_mut() {
@@ -204,6 +234,13 @@ pub fn cluster_runs(events: &[Value]) -> Vec<RunCluster> {
 }
 
 /// Current open turn of the current run, creating a run/turn as needed.
+/// Parse an event's RFC3339 `at` field to epoch ms via the JS `Date` parser.
+fn parse_at(ev: &Value) -> Option<f64> {
+    let s = ev.get("at").and_then(|v| v.as_str())?;
+    let ms = js_sys::Date::parse(s);
+    if ms.is_nan() { None } else { Some(ms) }
+}
+
 fn cur_turn(runs: &mut Vec<RunCluster>) -> &mut TurnCluster {
     let need_new_run = match runs.last() {
         Some(r) => r.ended,
